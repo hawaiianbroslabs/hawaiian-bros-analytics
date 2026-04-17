@@ -55,20 +55,21 @@ def load_data_from_sheets():
         # Extract the actual sheet ID (the part we need)
         sheet_id = "1lkI-SBV6wNQGd2CxkoZk36xlWz6CaRt8"
         
-        # Try to load different sheets by their tab IDs (gid)
+        # Use the exact gid values from Matt's Google Sheet
         base_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid="
         
         data = {}
         
-        # Try different common gid values for the tabs
+        # Exact tab IDs from the Google Sheet
         sheet_configs = [
-            ("fact_table", "0"),      # First sheet is usually gid=0
-            ("locations", "1507870409"),  # Try some common patterns
-            ("sales_metrics", "1"),
-            ("beverage_incidence", "2"),
-            ("dessert_incidence", "3"),
-            ("items", "4"),
-            ("summary", "5")
+            ("fact_table", "1820400707"),
+            ("locations", "775063354"), 
+            ("items", "844699807"),
+            ("sales_metrics", "1570627213"),
+            ("beverage_incidence", "42742573"),
+            ("dessert_incidence", "1530013637"),
+            ("entree_size_mix", "1655205958"),
+            ("summary", "625117969")
         ]
         
         for sheet_name, gid in sheet_configs:
