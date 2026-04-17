@@ -163,6 +163,207 @@ def get_location_performance(data, location_id=None):
     
     return df
 
+def parse_natural_language_query(question, data):
+    """Parse natural language questions about Hawaiian Bros data"""
+    question = question.lower().strip()
+    
+    # Extract location mentions
+    location_mentioned = None
+    location_perf = get_location_performance(data)
+    if len(location_perf) > 0 and 'location_id' in location_perf.columns:
+        for location in location_perf['location_id'].tolist():
+            location_clean = location.lower()
+            if any(term in question for term in [
+                'allen' if 'allen' in location_clean else '',
+                'alliance' if 'alliance' in location_clean else '',
+                'hulen' if 'hulen' in location_clean else '',
+                'belton' if 'belton' in location_clean else '',
+                'live oak' if 'live oak' in location_clean else ''
+            ] if term):
+                location_mentioned = location
+                break
+    
+    # Determine query type and metric
+    if any(word in question for word in ['average check', 'check size', 'ticket size']):
+        metric = 'average_check'
+        metric_display = 'Average Check'
+    elif any(word in question for word in ['beverage incidence', 'beverage attach', 'drink attach']):
+        metric = 'beverage_incidence' 
+        metric_display = 'Beverage Incidence'
+    elif any(word in question for word in ['dessert incidence', 'dessert attach']):
+        metric = 'dessert_incidence'
+        metric_display = 'Dessert Incidence'
+    elif any(word in question for word in ['sales', 'revenue']):
+        metric = 'Net Sales'
+        metric_display = 'Sales'
+    else:
+        metric = 'average_check'  # Default
+        metric_display = 'Average Check'
+    
+    # Determine comparison type
+    if any(word in question for word in ['highest', 'best', 'top', 'leading']):
+        comparison_type = 'ranking'
+    elif any(word in question for word in ['vs system', 'compared to', 'versus']):
+        comparison_type = 'vs_system'
+    elif any(word in question for word in ['trend', 'over time', 'trending']):
+        comparison_type = 'trend'
+    else:
+        comparison_type = 'current_value'
+    
+    return {
+        'metric': metric,
+        'metric_display': metric_display,
+        'location': location_mentioned,
+        'comparison_type': comparison_type,
+        'original_question': question
+    }
+
+def execute_custom_query(query_params, data):
+    """Execute a custom query and return results"""
+    
+    # Get the location performance data
+    location_perf = get_location_performance(data)
+    
+    if len(location_perf) == 0:
+        return {"error": "No data available for query"}
+    
+    # Handle natural language query
+    if query_params.get('natural_language'):
+        parsed = parse_natural_language_query(query_params['natural_language'], data)
+        metric = parsed['metric']
+        location = parsed['location']
+        comparison_type = parsed['comparison_type']
+        question = parsed['original_question']
+    else:
+        # Handle guided query
+        metric_map = {
+            'Average Check': 'average_check',
+            'Beverage Incidence': 'beverage_incidence', 
+            'Dessert Incidence': 'dessert_incidence',
+            'Sales': 'Net Sales',
+            'Transactions': 'Transactions'
+        }
+        metric = metric_map.get(query_params['metric'], 'average_check')
+        location = query_params.get('specific_location')
+        comparison_type = 'current_value'
+        question = f"{query_params['metric']} for {query_params['location']}"
+    
+    # Filter data based on location
+    if location and location != 'All Locations':
+        filtered_data = location_perf[location_perf['location_id'] == location]
+        if len(filtered_data) == 0:
+            return {"error": f"No data found for location: {location}"}
+    else:
+        filtered_data = location_perf
+    
+    # Calculate result based on metric
+    if metric in filtered_data.columns:
+        if comparison_type == 'ranking':
+            # Return top performers
+            top_locations = filtered_data.nlargest(5, metric)[['location_id', metric]]
+            return {
+                'type': 'ranking',
+                'question': question,
+                'metric': metric,
+                'data': top_locations,
+                'title': f"Top 5 Locations by {metric.replace('_', ' ').title()}"
+            }
+        else:
+            # Return specific value(s)
+            if location:
+                value = filtered_data[metric].iloc[0] if len(filtered_data) > 0 else 0
+                system_avg = location_perf[metric].mean() if metric in location_perf.columns else 0
+                
+                return {
+                    'type': 'single_value',
+                    'question': question,
+                    'location': location,
+                    'metric': metric,
+                    'value': value,
+                    'system_avg': system_avg,
+                    'title': f"{metric.replace('_', ' ').title()} for {location}"
+                }
+            else:
+                system_avg = filtered_data[metric].mean()
+                return {
+                    'type': 'system_value', 
+                    'question': question,
+                    'metric': metric,
+                    'value': system_avg,
+                    'title': f"System Average {metric.replace('_', ' ').title()}"
+                }
+    else:
+        return {"error": f"Metric '{metric}' not available in data"}
+
+def display_query_results(results):
+    """Display the results of a custom query"""
+    
+    if "error" in results:
+        st.error(f"Query Error: {results['error']}")
+        return
+    
+    st.header(f"🔍 Query Results")
+    st.subheader(results['title'])
+    
+    if results['type'] == 'single_value':
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # Format value based on metric type
+            if 'incidence' in results['metric']:
+                value_str = f"{results['value']:.1%}"
+                delta_val = ((results['value'] - results['system_avg']) / results['system_avg'] * 100) if results['system_avg'] > 0 else 0
+                delta_str = f"{delta_val:+.1f}% vs system"
+            elif 'check' in results['metric']:
+                value_str = f"${results['value']:.2f}"
+                delta_val = results['value'] - results['system_avg']
+                delta_str = f"${delta_val:+.2f} vs system"
+            else:
+                value_str = f"{results['value']:,.0f}"
+                delta_str = ""
+            
+            st.metric(
+                results['metric'].replace('_', ' ').title(),
+                value_str,
+                delta_str if delta_str else None
+            )
+        
+        with col2:
+            if 'incidence' in results['metric']:
+                st.metric("System Average", f"{results['system_avg']:.1%}")
+            elif 'check' in results['metric']:
+                st.metric("System Average", f"${results['system_avg']:.2f}")
+            else:
+                st.metric("System Average", f"{results['system_avg']:,.0f}")
+    
+    elif results['type'] == 'ranking':
+        # Display top performers table
+        display_data = results['data'].copy()
+        
+        # Format the metric column
+        if 'incidence' in results['metric']:
+            display_data[results['metric']] = display_data[results['metric']].apply(lambda x: f"{x:.1%}")
+        elif 'check' in results['metric']:
+            display_data[results['metric']] = display_data[results['metric']].apply(lambda x: f"${x:.2f}")
+        else:
+            display_data[results['metric']] = display_data[results['metric']].apply(lambda x: f"{x:,.0f}")
+        
+        st.dataframe(display_data, use_container_width=True, hide_index=True)
+    
+    elif results['type'] == 'system_value':
+        # Format value based on metric type
+        if 'incidence' in results['metric']:
+            value_str = f"{results['value']:.1%}"
+        elif 'check' in results['metric']:
+            value_str = f"${results['value']:.2f}"
+        else:
+            value_str = f"{results['value']:,.0f}"
+        
+        st.metric(
+            results['metric'].replace('_', ' ').title(),
+            value_str
+        )
+
 def create_metrics_dashboard(data, selected_location):
     """Create the main metrics dashboard"""
     
@@ -306,6 +507,69 @@ def main():
     if not data:
         data = create_sample_data()
     
+    # Query Interface
+    st.sidebar.markdown("### 🔍 Ask Questions")
+    
+    # Natural Language Query
+    user_question = st.sidebar.text_area(
+        "Ask about your data:",
+        placeholder="e.g., What's the average check at Allen TX?\nWhich locations have highest beverage incidence?\nShow me sales trends for Company vs Stine",
+        height=80,
+        help="Type your question in plain English"
+    )
+    
+    # Query Builder (Guided)
+    st.sidebar.markdown("#### Or Build a Query:")
+    
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        query_metric = st.selectbox(
+            "Metric:",
+            ["Average Check", "Beverage Incidence", "Dessert Incidence", "Sales", "Transactions"],
+            help="What do you want to analyze?"
+        )
+    
+    with col2:
+        query_comparison = st.selectbox(
+            "Show:",
+            ["Current Value", "vs System Avg", "vs Prior Year", "Trend"],
+            help="How should we present it?"
+        )
+    
+    query_location = st.sidebar.selectbox(
+        "Location(s):",
+        ["All Locations", "Company Only", "Franchise Only", "Stine Locations", "Individual Location"],
+        help="Which locations to include"
+    )
+    
+    if query_location == "Individual Location":
+        specific_location = st.sidebar.selectbox(
+            "Choose Location:",
+            locations[1:] if len(locations) > 1 else ["No locations available"],
+            help="Pick a specific restaurant"
+        )
+    else:
+        specific_location = None
+    
+    query_timeframe = st.sidebar.selectbox(
+        "Time Period:",
+        ["Last Week", "Last 4 Weeks", "Last 8 Weeks", "Month to Date", "Year to Date"],
+        help="What time period?"
+    )
+    
+    # Execute Query Button
+    if st.sidebar.button("🔍 Run Query", help="Execute your custom query"):
+        st.session_state.custom_query = True
+        st.session_state.query_params = {
+            'metric': query_metric,
+            'comparison': query_comparison,
+            'location': query_location,
+            'specific_location': specific_location,
+            'timeframe': query_timeframe,
+            'natural_language': user_question.strip() if user_question.strip() else None
+        }
+        st.rerun()
+    
     # Location selector
     st.sidebar.markdown("### Location Filter")
     
@@ -335,7 +599,26 @@ def main():
     )
     
     # Main content
-    if query_type == "🎯 Location Deep Dive":
+    # Check if we have a custom query to display
+    if hasattr(st.session_state, 'custom_query') and st.session_state.custom_query:
+        # Display custom query results
+        query_params = st.session_state.query_params
+        results = execute_custom_query(query_params, data)
+        display_query_results(results)
+        
+        # Add option to return to main dashboard
+        if st.button("📊 Return to Main Dashboard"):
+            st.session_state.custom_query = False
+            st.rerun()
+            
+        # Show the data that was used for the query
+        st.markdown("---")
+        st.subheader("📋 Supporting Data")
+        location_perf = get_location_performance(data)
+        if len(location_perf) > 0:
+            st.dataframe(location_perf.head(10), use_container_width=True)
+    
+    elif query_type == "🎯 Location Deep Dive":
         st.header(f"Deep Dive: {selected_location}")
         create_metrics_dashboard(data, selected_location)
     
