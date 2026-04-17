@@ -4,8 +4,6 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import gspread
-from google.oauth2.service_account import Credentials
 from urllib.parse import urlparse, parse_qs
 
 # Page config with Hawaiian Bros branding
